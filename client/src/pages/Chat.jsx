@@ -68,7 +68,7 @@ const Chat = () => {
 
     return (
         <Container className="mt-4">
-            <h3 className="mb-3">Chat with Farmer</h3>
+            <h3 className="mb-3">Chat </h3>
             <Card style={{ height: '70vh' }}>
                 <Card.Body style={{ overflowY: 'auto', display: 'flex', flexDirection: 'column' }}>
                     {messages.length === 0 && <p className="text-center text-muted mt-5">No messages yet. Start negotiation!</p>}

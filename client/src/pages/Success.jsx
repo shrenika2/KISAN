@@ -27,8 +27,13 @@ const Success = () => {
                 });
                 setStatus('Payment Successful! Order Confirmed.');
             } catch (err) {
-                console.error(err);
-                setStatus('Payment Verification Failed. Please contact support.');
+                console.error("Payment Verify Error:", err);
+                const backendMsg = err.response?.data?.msg;
+                if (backendMsg) {
+                    setStatus(`Error: ${backendMsg}`);
+                } else {
+                    setStatus('Payment Verification Failed. Please contact support.');
+                }
             } finally {
                 setLoading(false);
             }

@@ -1,31 +1,54 @@
-import React, { useEffect, useState, useContext } from 'react';
+import React, { useEffect, useState, useContext, useCallback } from 'react';
 import axios from 'axios';
 import { Container, Row, Col, Card, Table, Spinner, Button, Alert, Badge } from 'react-bootstrap';
 import { AuthContext } from '../context/AuthContext';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+
+const lineTotal = (o) =>
+    Number(o.negotiated_price || o.original_price || 0) * Number(o.requested_quantity || 0);
 
 const FarmerDashboard = () => {
     const { user } = useContext(AuthContext);
     const [stats, setStats] = useState(null);
+    const [recentSales, setRecentSales] = useState([]);
+    const [availableReleased, setAvailableReleased] = useState(0);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState('');
     const navigate = useNavigate();
+    const location = useLocation();
+
+    const loadDashboard = useCallback(async () => {
+        try {
+            const [statsRes, ordersRes] = await Promise.all([
+                axios.get('/stats/farmer-dashboard'),
+                axios.get('/orders/farmer-orders')
+            ]);
+            setStats(statsRes.data);
+            const list = Array.isArray(ordersRes.data) ? ordersRes.data : [];
+            setRecentSales(list.slice(0, 5));
+            const releasedSum = list
+                .filter((o) => o.escrowStatus === 'released')
+                .reduce((s, o) => s + lineTotal(o), 0);
+            setAvailableReleased(releasedSum);
+            setError('');
+        } catch (err) {
+            console.error('Error loading farmer dashboard', err);
+            setError('Failed to load dashboard statistics.');
+        } finally {
+            setLoading(false);
+        }
+    }, []);
 
     useEffect(() => {
-        const fetchStats = async () => {
-            try {
-                const res = await axios.get('/stats/farmer-dashboard');
-                setStats(res.data);
-                setLoading(false);
-            } catch (err) {
-                console.error("Error fetching stats", err);
-                setError('Failed to load dashboard statistics.');
-                setLoading(false);
-            }
-        };
-
-        fetchStats();
-    }, []);
+        if (!user) return;
+        if (user.role !== 'farmer') {
+            setLoading(false);
+            return;
+        }
+        if (location.pathname !== '/farmer-dashboard') return;
+        setLoading(true);
+        loadDashboard();
+    }, [user, location.pathname, loadDashboard]);
 
     if (loading) {
         return (
@@ -64,6 +87,9 @@ const FarmerDashboard = () => {
                         <Card.Body className="text-center p-3">
                             <h6 className="text-uppercase small" style={{ opacity: 0.9 }}>Total Earnings</h6>
                             <h2 className="display-6 fw-bold mb-0">₹{stats?.totalEarnings || 0}</h2>
+                            <small className="d-block mt-2" style={{ opacity: 0.9 }}>
+                                Available (released escrow): ₹{availableReleased.toFixed(0)}
+                            </small>
                         </Card.Body>
                     </Card>
                 </Col>
@@ -95,6 +121,47 @@ const FarmerDashboard = () => {
                     </Card>
                 </Col>
             </Row>
+
+            {recentSales.length > 0 && (
+                <Card className="shadow-sm border-0 mb-4">
+                    <Card.Header className="bg-white border-bottom-0 pt-4 pb-0 d-flex justify-content-between align-items-center">
+                        <h4 className="mb-0 fw-bold">Recent sales &amp; payments</h4>
+                        <Button variant="link" size="sm" onClick={() => navigate('/farmer-orders')}>View all</Button>
+                    </Card.Header>
+                    <Card.Body>
+                        <div className="table-responsive">
+                            <Table hover className="align-middle mb-0">
+                                <thead className="table-light">
+                                    <tr>
+                                        <th>Crop</th>
+                                        <th>Buyer</th>
+                                        <th>Payment</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {recentSales.map((order) => (
+                                        <tr key={order._id}>
+                                            <td>{order.product_id?.crop_name || '—'}</td>
+                                            <td>{order.consumer_id?.name || '—'}</td>
+                                            <td>
+                                                {order?.escrowStatus === 'held' && (
+                                                    <Badge bg="warning" text="dark">Payment Held in Escrow</Badge>
+                                                )}
+                                                {order?.escrowStatus === 'released' && (
+                                                    <Badge bg="success">Payment Dispatched</Badge>
+                                                )}
+                                                {order?.escrowStatus !== 'held' && order?.escrowStatus !== 'released' && (
+                                                    <span className="text-muted small">—</span>
+                                                )}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </Table>
+                        </div>
+                    </Card.Body>
+                </Card>
+            )}
 
             <Row>
                 <Col md={8}>

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
-import { Container, Table, Badge, Button, Spinner } from 'react-bootstrap';
+import { Container, Table, Badge, Button, Spinner, Form, Modal, Alert } from 'react-bootstrap';
 import { Link } from 'react-router-dom';
 
 const MyOrders = () => {
@@ -21,34 +21,91 @@ const MyOrders = () => {
         fetchOrders();
     }, []);
 
-    const handlePay = async (orderId, productName, amount) => {
+    const [bargainOrderId, setBargainOrderId] = useState(null);
+    const [bargainPrice, setBargainPrice] = useState('');
+    const [releaseConfirmOrder, setReleaseConfirmOrder] = useState(null);
+    const [disputeNotice, setDisputeNotice] = useState('');
+
+    const handleComplete = async (orderId) => {
         try {
-            const res = await axios.post('/payments/create-checkout-session', {
-                order_id: orderId,
-                product_name: productName,
-                amount: amount
+            await axios.put(`/orders/${orderId}/complete`);
+            const updatedOrders = orders.map(o => {
+                if (o._id === orderId) return { ...o, order_status: 'completed' };
+                return o;
             });
-            // Redirect to Stripe Checkout
-            window.location.href = res.data.url;
+            setOrders(updatedOrders);
+            alert("Order completed successfully");
         } catch (err) {
-            alert("Payment Initiation Failed: " + (err.response?.data?.msg || err.message));
+            alert("Failed to complete order: " + (err.response?.data?.msg || err.message));
         }
     };
 
-    // // Dev Helper to Approve Orders (Since we don't have farmer dashboard yet)
-    // const devApproveOrder = async (orderId) => {
-    //     try {
-    //         await axios.put(`/orders/${orderId}/status`, { status: 'approved', final_price: 0 }); // 0 final price means using negotiated price fallback logic in payment if needed or just status update
-    //         const updatedOrders = orders.map(o => {
-    //             if (o._id === orderId) return { ...o, order_status: 'approved' };
-    //             return o;
-    //         });
-    //         setOrders(updatedOrders);
-    //     } catch (err) {
-    //         console.error(err);
-    //         alert("Dev Approve Failed");
-    //     }
-    // };
+    const handlePayOnline = async (order) => {
+        const amount = order.requested_quantity * (order.negotiated_price || 0);
+        if (!amount || amount <= 0) {
+            alert('Invalid order amount.');
+            return;
+        }
+        try {
+            const { data } = await axios.post('/payment/create-session', {
+                orderId: order._id,
+                product_name: order.product_id?.crop_name || 'Farm order',
+                amount
+            });
+            if (data.url) {
+                window.location.href = data.url;
+            } else if (data.mockUrl) {
+                window.location.href = data.mockUrl;
+            } else {
+                alert('No checkout URL returned');
+            }
+        } catch (err) {
+            alert(err.response?.data?.msg || err.message || 'Could not start payment');
+        }
+    };
+
+    const handleReleaseFunds = async (orderId) => {
+        const target = orders.find((o) => o._id === orderId);
+        if (target?.payment_method === 'Online') {
+            setReleaseConfirmOrder(null);
+            alert('Online orders cannot be released from your side. The farmer releases escrow after you share your delivery code.');
+            return;
+        }
+        try {
+            await axios.put(`/orders/${orderId}/release`);
+            const res = await axios.get('/orders/my-orders');
+            setOrders(res.data);
+            setReleaseConfirmOrder(null);
+            alert('Escrow released — order marked completed.');
+        } catch (err) {
+            alert('Failed to confirm: ' + (err.response?.data?.msg || err.message));
+        }
+    };
+
+    const handleDispute = async (orderId) => {
+        try {
+            await axios.post(`/orders/${orderId}/dispute`);
+            await axios.get('/orders/my-orders').then((res) => setOrders(res.data));
+            setDisputeNotice('Admin has been notified.');
+            setTimeout(() => setDisputeNotice(''), 5000);
+        } catch (err) {
+            alert('Failed to report issue: ' + (err.response?.data?.msg || err.message));
+        }
+    };
+
+    const handleConsumerRespond = async (orderId, status, negotiated_price) => {
+        try {
+            await axios.put(`/orders/${orderId}/consumer-respond`, { status, negotiated_price });
+            setBargainOrderId(null);
+            setBargainPrice('');
+            // Refresh order list by refetching
+            const res = await axios.get('/orders/my-orders');
+            setOrders(res.data);
+            alert(status === 'requested' ? "Counter offer sent back!" : `Order ${status}!`);
+        } catch (err) {
+            alert("Failed to respond to order: " + (err.response?.data?.msg || err.message));
+        }
+    };
 
     if (loading) return <Container className="text-center mt-5"><Spinner animation="border" /></Container>;
 
@@ -56,8 +113,9 @@ const MyOrders = () => {
         <Container className="mt-4">
             <div className="d-flex justify-content-between align-items-center mb-4">
                 <h2>My Orders</h2>
-                <small className="text-muted">Dev Hint: Use "Force Approve" to test payment flow</small>
+
             </div>
+            {disputeNotice && <Alert variant="info" className="mb-3 mb-md-4" onClose={() => setDisputeNotice('')} dismissible>{disputeNotice}</Alert>}
             <Table striped bordered hover responsive className="align-middle">
                 <thead className="bg-light">
                     <tr>
@@ -66,7 +124,7 @@ const MyOrders = () => {
                         <th>Qty</th>
                         <th>Price/kg</th>
                         <th>Total</th>
-                        <th>Payment</th>
+                        <th>Type</th>
                         <th>Status</th>
                         <th>Actions</th>
                     </tr>
@@ -78,66 +136,194 @@ const MyOrders = () => {
                                 <div className="d-flex align-items-center">
                                     <img
                                         src={order.product_id?.image_url || 'https://via.placeholder.com/50'}
-                                        alt={order.product_id?.crop_name || 'Product Unavailable'}
+                                        alt={order.product_id?.crop_name || 'Product'}
                                         style={{ width: '50px', height: '50px', objectFit: 'cover', borderRadius: '8px', marginRight: '15px' }}
                                     />
                                     <div>
-                                        <div className="fw-bold">{order.product_id?.crop_name || 'Unknown Product'}</div>
+                                        <div className="fw-bold">{order.product_id?.crop_name || 'Unknown'}</div>
                                         <small className="text-muted">{new Date(order.order_date).toLocaleDateString()}</small>
                                     </div>
                                 </div>
                             </td>
-                            <td>{order.farmer_id.name}</td>
+                            <td>{order.farmer_id?.name || 'Unknown Farmer'}</td>
                             <td>{order.requested_quantity} kg</td>
                             <td>₹{order.negotiated_price}</td>
                             <td className="fw-bold">₹{order.requested_quantity * order.negotiated_price}</td>
                             <td>
-                                {order.payment_method === 'Cash' ? (
-                                    <Badge bg="secondary">CASH</Badge>
-                                ) : (
-                                    <Badge bg="info">ONLINE</Badge>
-                                )}
-                            </td>
-                            <td>
-                                <Badge bg={
-                                    order.order_status === 'approved' ? 'info' :
-                                        order.order_status === 'paid' ? 'success' :
-                                            order.order_status === 'rejected' ? 'danger' : 'warning'
-                                }>
-                                    {order.order_status.toUpperCase()}
+                                <Badge bg={order.payment_method === 'Cash' ? 'secondary' : 'info'}>
+                                    {order.payment_method.toUpperCase()}
                                 </Badge>
                             </td>
                             <td>
-                                <Link to={`/chat/${order.farmer_id._id}`} className="btn btn-sm btn-outline-primary me-2">
-                                    <i className="bi bi-chat-dots-fill"></i> Chat
-                                </Link>
+                                <div className="d-flex flex-column gap-1">
+                                    <Badge bg={
+                                        order.order_status === 'completed' ? 'success' :
+                                            order.order_status === 'shipped' ? 'info' :
+                                                order.order_status === 'approved' ? 'primary' :
+                                                    order.order_status === 'rejected' ? 'danger' :
+                                                        order.order_status === 'counter_offered' ? 'info' :
+                                                            order.order_status === 'paid' ? 'info' : 'warning'
+                                    }>
+                                        {order.order_status === 'counter_offered'
+                                            ? 'FARMER COUNTERED'
+                                            : order.order_status === 'shipped'
+                                              ? 'SHIPPED · IN TRANSIT'
+                                              : String(order.order_status || '').toUpperCase()}
+                                    </Badge>
+                                    {order?.escrowStatus === 'held' && (
+                                        <Badge bg="warning" text="dark" className="small">Escrow: held</Badge>
+                                    )}
+                                    {order?.escrowStatus === 'released' && (
+                                        <Badge bg="success" className="small">Escrow: released</Badge>
+                                    )}
+                                    {order?.escrowStatus === 'disputed' && (
+                                        <Badge bg="danger" className="small">Escrow: disputed</Badge>
+                                    )}
+                                </div>
+                            </td>
+                            <td>
+                                <div className="d-flex gap-2 flex-wrap align-items-center">
+                                    <Link to={`/chat/${order.farmer_id?._id}`} className="btn btn-sm btn-outline-primary">
+                                        <i className="bi bi-chat-dots"></i> Chat
+                                    </Link>
 
-                                {/* {order.order_status === 'requested' && (
-                                    <Button
-                                        size="sm"
-                                        variant="outline-secondary"
-                                        className="me-2"
-                                        onClick={() => devApproveOrder(order._id)}
-                                        title="Dev: Force Approve"
-                                    >
-                                        <i className="bi bi-check-lg"></i> Dev Approve
-                                    </Button>
-                                )} */}
+                                    <Link to={`/orders/${order._id}`} className="btn btn-sm btn-outline-secondary">
+                                        Progress
+                                    </Link>
 
-                                {order.order_status === 'approved' && order.payment_method === 'Online' && (
-                                    <Button
-                                        size="sm"
-                                        className="btn-primary"
-                                        onClick={() => handlePay(order._id, order.product_id?.crop_name || 'Product', order.requested_quantity * order.negotiated_price)}
-                                    >
-                                        <i className="bi bi-credit-card-fill"></i> Pay With Stripe
-                                    </Button>
+                                    {order.payment_method === 'Online' &&
+                                        order.order_status === 'approved' &&
+                                        order.paymentStatus !== 'paid' &&
+                                        order.escrowStatus !== 'held' && (
+                                            <Button
+                                                size="sm"
+                                                variant="primary"
+                                                onClick={() => handlePayOnline(order)}
+                                            >
+                                                Pay securely (Escrow)
+                                            </Button>
+                                        )}
+
+                                    {order?.escrowStatus === 'held' && order.payment_method === 'Online' && (
+                                        <div className="w-100 mt-2 small text-muted border rounded p-2 bg-light">
+                                            <strong>Online escrow:</strong> share the delivery code from the order page with your farmer after you receive the goods. They verify it to release funds — you cannot release escrow manually.
+                                            <div className="mt-2">
+                                                <Button
+                                                    size="sm"
+                                                    variant="outline-danger"
+                                                    className="w-100"
+                                                    onClick={() => handleDispute(order._id)}
+                                                >
+                                                    Report Issue
+                                                </Button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    {order?.escrowStatus === 'held' && order.payment_method !== 'Online' && (
+                                        <div className="w-100 mt-2">
+                                            <Button
+                                                size="lg"
+                                                variant="success"
+                                                className="w-100 fw-semibold shadow-sm"
+                                                onClick={() => setReleaseConfirmOrder(order)}
+                                            >
+                                                ✅ Confirm Goods Received &amp; Release Funds
+                                            </Button>
+                                            <Button
+                                                size="sm"
+                                                variant="outline-danger"
+                                                className="w-100 mt-2"
+                                                onClick={() => handleDispute(order._id)}
+                                            >
+                                                Report Issue
+                                            </Button>
+                                        </div>
+                                    )}
+
+                                    {order.order_status === 'approved' && order.payment_method === 'Cash' && (
+                                        <Button
+                                            size="sm"
+                                            variant="success"
+                                            onClick={() => handleComplete(order._id)}
+                                        >
+                                            <i className="bi bi-check-circle-fill"></i> Mark Completed
+                                        </Button>
+                                    )}
+
+                                    {order.order_status === 'counter_offered' && bargainOrderId !== order._id && (
+                                        <>
+                                            <Button size="sm" variant="success" onClick={() => handleConsumerRespond(order._id, 'approved')}>
+                                                Accept
+                                            </Button>
+                                            <Button size="sm" variant="outline-primary" onClick={() => {
+                                                setBargainOrderId(order._id);
+                                                setBargainPrice(order.negotiated_price);
+                                            }}>
+                                                Bargain
+                                            </Button>
+                                            <Button size="sm" variant="danger" onClick={() => handleConsumerRespond(order._id, 'rejected')}>
+                                                Reject
+                                            </Button>
+                                        </>
+                                    )}
+
+                                    {order.order_status === 'completed' && order.product_id && (
+                                        <Link
+                                            to={`/product/${order.product_id._id}`}
+                                            className="btn btn-sm btn-warning text-dark"
+                                        >
+                                            <i className="bi bi-star-fill"></i> Add Review
+                                        </Link>
+                                    )}
+                                </div>
+                                {bargainOrderId === order._id && (
+                                    <div className="mt-2 p-2 bg-light border rounded">
+                                        <Form.Control
+                                            type="number"
+                                            size="sm"
+                                            value={bargainPrice}
+                                            onChange={(e) => setBargainPrice(e.target.value)}
+                                            className="mb-2"
+                                        />
+                                        <div className="d-flex gap-2">
+                                            <Button size="sm" variant="primary" onClick={() => handleConsumerRespond(order._id, 'requested', bargainPrice)}>
+                                                Send Offer
+                                            </Button>
+                                            <Button size="sm" variant="secondary" onClick={() => setBargainOrderId(null)}>
+                                                Cancel
+                                            </Button>
+                                        </div>
+                                    </div>
                                 )}
                             </td>
                         </tr>
                     ))}
+                    {orders.length === 0 && (
+                        <tr>
+                            <td colSpan="8" className="text-center py-5 text-muted">No orders found.</td>
+                        </tr>
+                    )}
                 </tbody>
             </Table>
+
+            <Modal show={!!releaseConfirmOrder} onHide={() => setReleaseConfirmOrder(null)} centered>
+                <Modal.Header closeButton>
+                    <Modal.Title>Release escrow</Modal.Title>
+                </Modal.Header>
+                <Modal.Body>
+                    Confirm you received the goods. This will mark the order completed and release funds to the farmer (settlement rules apply on the platform).
+                </Modal.Body>
+                <Modal.Footer>
+                    <Button variant="secondary" onClick={() => setReleaseConfirmOrder(null)}>Cancel</Button>
+                    <Button
+                        variant="success"
+                        onClick={() => releaseConfirmOrder && handleReleaseFunds(releaseConfirmOrder._id)}
+                    >
+                        ✅ Yes, release funds
+                    </Button>
+                </Modal.Footer>
+            </Modal>
         </Container>
     );
 };

@@ -33,7 +33,6 @@ const Navigation = () => {
 
         if (socket) {
             const handleRefresh = () => {
-                console.log("Socket event received: Refreshing unread count...");
                 fetchUnread();
             };
 
@@ -84,11 +83,13 @@ const Navigation = () => {
                                         <Nav.Link as={Link} to="/farmer-dashboard" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Dashboard</Nav.Link>
                                         <Nav.Link as={Link} to="/my-products" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">My Listings</Nav.Link>
                                         <Nav.Link as={Link} to="/farmer-orders" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Orders</Nav.Link>
+                                        <Nav.Link as={Link} to="/demand-forecast" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Demand Forecast</Nav.Link>
                                     </>
                                 ) : (
                                     <>
                                         <Nav.Link as={Link} to="/dashboard" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Dashboard</Nav.Link>
                                         <Nav.Link as={Link} to="/marketplace" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Marketplace</Nav.Link>
+                                        <Nav.Link as={Link} to="/demand-forecast" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">Demand Forecast</Nav.Link>
                                         <Nav.Link as={Link} to="/my-orders" className="mx-2 text-secondary w-100 w-md-auto text-center text-md-start">My Orders</Nav.Link>
                                     </>
                                 )}

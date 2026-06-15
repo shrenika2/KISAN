@@ -4,8 +4,8 @@ const { fetchMandiPrice } = require("../utils/mandi");
 
 router.post("/analyze-voice", async (req, res) => {
     try {
-        const { transcript, formData, cropOptions, history = [] } = req.body;
-        console.log("🎙️ Received:", transcript);
+        const { transcript, formData, cropOptions, history = [], language = 'en-IN' } = req.body;
+        console.log("🎙️ Received:", transcript, "| Language:", language);
 
         const GROQ_API_KEY = process.env.GROQ_API_KEY;
         if (!GROQ_API_KEY) {
@@ -52,12 +52,14 @@ router.post("/analyze-voice", async (req, res) => {
           - IF Price given: Analyze it vs Market Data.
           - *CRITICAL*: If any field (Qty, Date, Location) is missing, ASK FOR IT.
           - *DONE*: IF ALL fields are filled (and valid), set "action": "upload_image", "speech": "Sab details mil gayi! Ab photo khichiye."
+          - *ACCEPTANCE*: IF user confirms/accepts listing (e.g. "submit", "ho", "accept", "submit kara"), set "action": "submit_form".
+      - *LANGUAGE & TONE*: The user is speaking ${language === 'mr-IN' ? 'Marathi' : (language === 'hi-IN' ? 'Hindi' : 'English / Hinglish')}. Respond in the same language. If Marathi, reply purely in natural Marathi.
       
       Return JSON ONLY:
       {
         "updates": { "category": "vegetables", "crop_name": "Potato", ... },
-        "speech": "Hinglish response.",
-        "action": "upload_image" (ONLY if complete/done)
+        "speech": "Your response in the corresponding language.",
+        "action": "upload_image" (or "submit_form" if the user accepts/confirms listing)
       }
     `;
 
@@ -75,6 +77,10 @@ router.post("/analyze-voice", async (req, res) => {
         for (const model of models) {
             try {
                 console.log(`🤖 Trying Model: ${model}`);
+                
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
                 const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
                     method: "POST",
                     headers: {
@@ -86,8 +92,11 @@ router.post("/analyze-voice", async (req, res) => {
                         messages: messages,
                         temperature: 0.1,
                         response_format: { type: "json_object" }
-                    })
+                    }),
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
 
                 if (!response.ok) throw new Error(await response.text());
 
@@ -104,7 +113,11 @@ router.post("/analyze-voice", async (req, res) => {
                 usedModel = model;
                 break; // Success
             } catch (err) {
-                console.warn(`⚠️ Model ${model} failed:`, err.message);
+                if (err.name === 'AbortError') {
+                    console.warn(`⏳ Model ${model} timed out after 10s. Trying next...`);
+                } else {
+                    console.warn(`⚠️ Model ${model} failed:`, err.message);
+                }
             }
         }
 

@@ -28,7 +28,9 @@ const TransactionHistory = () => {
                 const res = await axios.get(endpoint);
                 // Filter for paid or completed orders
                 const paidOrders = res.data.filter(order =>
-                    order.order_status === 'paid' || order.order_status === 'completed'
+                    order.order_status === 'paid' ||
+                    order.order_status === 'shipped' ||
+                    order.order_status === 'completed'
                 );
                 setTransactions(paidOrders);
                 setLoading(false);

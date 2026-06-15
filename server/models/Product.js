@@ -12,9 +12,51 @@ const productSchema = new mongoose.Schema({
         district: String,
         state: String
     },
+    location: {
+        type: {
+            type: String,
+            enum: ['Point'],
+            default: 'Point'
+        },
+        coordinates: {
+            type: [Number],
+            default: [0, 0]
+        }
+    },
+    farmLocation: {
+        type: {
+            type: String,
+            enum: ['Point'],
+            default: 'Point'
+        },
+        coordinates: {
+            type: [Number],
+            default: [0, 0]
+        }
+    },
+    locationName: {
+        village: String,
+        district: String
+    },
+    formattedAddress: {
+        village: String,
+        district: String,
+        state: String
+    },
+    address: {
+        fullAddress: String,
+        village: String,
+        district: String,
+        state: String,
+        pincode: String,
+        isManual: { type: Boolean, default: false }
+    },
     image_url: String,
     status: { type: String, enum: ['active', 'inactive', 'sold'], default: 'active' },
     created_at: { type: Date, default: Date.now }
 });
+
+productSchema.index({ location: '2dsphere' });
+productSchema.index({ farmLocation: '2dsphere' });
 
 module.exports = mongoose.model('Product', productSchema);

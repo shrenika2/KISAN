@@ -17,9 +17,20 @@ const io = require('socket.io')(server, {
     }
 });
 
-// Middleware
-app.use(express.json());
 app.use(cors());
+
+const paymentController = require('./controllers/paymentController');
+app.post(
+    '/api/payment/webhook',
+    express.raw({ type: 'application/json' }),
+    (req, res, next) => {
+        req.io = io;
+        next();
+    },
+    paymentController.stripeWebhook
+);
+
+app.use(express.json());
 
 // Attach io to requests
 app.use((req, res, next) => {
@@ -52,12 +63,15 @@ app.use('/api/products', require('./routes/products'));
 app.use('/api/orders', require('./routes/orders'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/payments', require('./routes/payments'));
+app.use('/api/payment', require('./routes/payment'));
 app.use('/api/stats', require('./routes/stats'));
 app.use('/api/ai', require('./routes/ai'));
 app.use('/api/mandi', require('./routes/mandi'));
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/reviews', require('./routes/reviews'));
 app.use('/api/chatbot', require('./routes/chatbot'));
+app.use('/api/bids', require('./routes/bids'));
+app.use('/api/geo', require('./routes/geo'));
 
 // Serve Static Files (Uploads)
 app.use('/uploads', express.static(require('path').join(__dirname, 'public/uploads')));

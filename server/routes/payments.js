@@ -3,105 +3,96 @@ const router = express.Router();
 const Payment = require('../models/Payment');
 const Order = require('../models/Order');
 const auth = require('../middleware/auth');
+const paymentController = require('../controllers/paymentController');
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const { getStripeOrNull, ensureEscrowPaymentApplied } = paymentController;
+const stripe = () => getStripeOrNull();
 
-// Create Checkout Session
+// Legacy alias — prefer POST /api/payment/create-session
 router.post('/create-checkout-session', auth, async (req, res) => {
-    const { order_id, product_name, amount } = req.body;
-
-    try {
-        const session = await stripe.checkout.sessions.create({
-            payment_method_types: ['card'],
-            line_items: [
-                {
-                    price_data: {
-                        currency: 'inr',
-                        product_data: {
-                            name: product_name,
-                        },
-                        unit_amount: amount * 100, // Amount in paise
-                    },
-                    quantity: 1,
-                },
-            ],
-            mode: 'payment',
-            success_url: `${process.env.CLIENT_URL}/success?session_id={CHECKOUT_SESSION_ID}&order_id=${order_id}`,
-            cancel_url: `${process.env.CLIENT_URL}/cancel`,
-        });
-
-        res.json({ id: session.id, url: session.url });
-    } catch (err) {
-        console.error(err.message);
-        res.status(500).send('Server Error: ' + err.message);
-    }
+    return paymentController.createSession(req, res);
 });
 
-// Verify Session and Update Order
 router.post('/verify-payment', auth, async (req, res) => {
-    const { order_id, session_id } = req.body;
+    const { session_id, order_id } = req.body;
 
     try {
-        // In a real app, verify with Stripe API using session_id
-        // const session = await stripe.checkout.sessions.retrieve(session_id);
-        // if (session.payment_status === 'paid') ...
-
-        // For Hackathon/Test Mode with Mock Key, we assume success if we reached here
-        // But if User provided real key, we should ideally verify. 
-        // We will just trust the callback for this logical flow demo as per user request "basic".
-
-        await Order.findByIdAndUpdate(order_id, { order_status: 'paid' });
-
-        const existingPayment = await Payment.findOne({ order_id });
-        if (!existingPayment) {
-            const order = await Order.findById(order_id);
-            const payment = new Payment({
-                order_id,
-                consumer_id: req.user.id,
-                farmer_id: order.farmer_id,
-                amount: order.final_price || order.negotiated_price,
-                payment_method: 'Card',
-                payment_status: 'success',
-                transaction_id: session_id,
-                payment_date: Date.now()
-            });
-            await payment.save();
+        if (!session_id) {
+            return res.status(400).json({ msg: 'Session ID is missing.' });
         }
 
-        res.json({ success: true, msg: 'Payment Verified' });
+        if (session_id.startsWith('demo_session_')) {
+            const trusted_order_id = order_id || session_id.replace(/^demo_session_/, '');
+            if (!trusted_order_id) {
+                return res.status(400).json({ msg: 'Order id missing for demo payment.' });
+            }
+            try {
+                await ensureEscrowPaymentApplied({
+                    orderId: trusted_order_id,
+                    transactionId: session_id,
+                    consumerId: req.user.id,
+                    io: req.io,
+                    source: 'mock'
+                });
+            } catch (e) {
+                return res.status(e.statusCode || 500).json({ msg: e.message });
+            }
+            return res.json({ success: true, msg: 'Demo payment recorded — escrow held on platform', demo: true });
+        }
+
+        const st = stripe();
+        if (!st) {
+            return res.status(503).json({ msg: 'Stripe is not configured.' });
+        }
+
+        const session = await st.checkout.sessions.retrieve(session_id);
+
+        if (session.payment_status !== 'paid') {
+            return res.status(400).json({ msg: 'Payment was not verified by Stripe.' });
+        }
+
+        const trusted_order_id = session.metadata?.order_id;
+
+        if (!trusted_order_id) {
+            return res.status(400).json({ msg: 'Order metadata missing from Stripe session.' });
+        }
+
+        await ensureEscrowPaymentApplied({
+            orderId: trusted_order_id,
+            transactionId: session_id,
+            consumerId: req.user.id,
+            io: req.io,
+            source: 'stripe'
+        });
+
+        res.json({ success: true, msg: 'Payment verified — funds held in escrow until you confirm delivery' });
     } catch (err) {
+        if (err.statusCode) {
+            return res.status(err.statusCode).json({ msg: err.message });
+        }
         console.error(err);
         res.status(500).send('Server Error');
     }
 });
 
-// Mock Process (Deprecated but kept for fallback)
 router.post('/process', auth, async (req, res) => {
 
-    const { order_id, farmer_id, amount, payment_method } = req.body;
+    const { order_id } = req.body;
 
     try {
-        // Create Payment Record
-        const payment = new Payment({
-            order_id,
-            consumer_id: req.user.id,
-            farmer_id,
-            amount,
-            payment_method,
-            payment_status: 'success', // Auto success for hackathon
-            transaction_id: 'TXN_' + Date.now(),
-            payment_date: Date.now()
+        const tid = 'TXN_' + Date.now();
+        await paymentController.ensureEscrowPaymentApplied({
+            orderId: order_id,
+            transactionId: tid,
+            consumerId: req.user.id,
+            io: req.io,
+            source: 'mock'
         });
-
-        await payment.save();
-
-        // Update Order Status
-        await Order.findByIdAndUpdate(order_id, { order_status: 'paid' });
-
+        const payment = await Payment.findOne({ order_id }).sort({ createdAt: -1 });
         res.json({ msg: 'Payment Successful', payment });
     } catch (err) {
         console.error(err.message);
-        res.status(500).send('Server Error');
+        res.status(err.statusCode || 500).json({ msg: err.message || 'Server Error' });
     }
 });
 

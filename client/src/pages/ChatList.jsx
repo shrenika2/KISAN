@@ -4,8 +4,9 @@ import { Container, ListGroup, Image, Spinner } from 'react-bootstrap';
 import { useNavigate } from 'react-router-dom';
 import { AuthContext } from '../context/AuthContext';
 import { io } from 'socket.io-client';
+import { getSocketURL } from '../utils/socketUrl';
 
-const socket = io("/");
+const socket = io(getSocketURL());
 
 const ChatList = () => {
     const [conversations, setConversations] = useState([]);

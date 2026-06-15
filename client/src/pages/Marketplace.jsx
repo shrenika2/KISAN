@@ -1,12 +1,14 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
-import { Container, Row, Col, Card, Button, Badge, Spinner, Form } from 'react-bootstrap';
+import { Container, Row, Col, Spinner, Form, Button } from 'react-bootstrap';
 import OrderModal from '../components/OrderModal';
+import useLocation from '../hooks/useLocation';
+import ProductCard from '../components/ProductCard';
+import calculateDistance from '../utils/haversine';
 
 const Marketplace = () => {
     const [products, setProducts] = useState([]);
-    const [filteredProducts, setFilteredProducts] = useState([]);
     const [loading, setLoading] = useState(true);
     const [selectedProduct, setSelectedProduct] = useState(null);
     const [showModal, setShowModal] = useState(false);
@@ -16,13 +18,31 @@ const Marketplace = () => {
     const [searchTerm, setSearchTerm] = useState('');
     const [maxPrice, setMaxPrice] = useState('');
     const [category, setCategory] = useState('');
+    const [nearMe, setNearMe] = useState(false);
+    const [radiusKm, setRadiusKm] = useState(50);
+    const {
+        latitude,
+        longitude,
+        error: locationError,
+        getLocation,
+        isTracking,
+        startTracking,
+        stopTracking
+    } = useLocation();
+    const hasUserLocation = Number.isFinite(latitude) && Number.isFinite(longitude);
 
     useEffect(() => {
         const fetchProducts = async () => {
             try {
-                const res = await axios.get('/products');
+                const params = {};
+                if (nearMe && hasUserLocation) {
+                    params.lat = latitude;
+                    params.lng = longitude;
+                    params.radius = radiusKm;
+                }
+
+                const res = await axios.get('/products', { params });
                 setProducts(res.data);
-                setFilteredProducts(res.data);
             } catch (err) {
                 console.error(err);
             } finally {
@@ -30,39 +50,93 @@ const Marketplace = () => {
             }
         };
         fetchProducts();
-    }, []);
+    }, [nearMe, latitude, longitude, radiusKm, hasUserLocation]);
 
     useEffect(() => {
+        if (nearMe) {
+            getLocation();
+        }
+    }, [nearMe, getLocation]);
+
+    const filteredProducts = useMemo(() => {
         let result = products;
 
         if (searchTerm) {
-            result = result.filter(product =>
-                product.crop_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-                product.sell_location?.district.toLowerCase().includes(searchTerm.toLowerCase())
-            );
+            result = result.filter((product) => {
+                const searchLower = searchTerm.toLowerCase();
+                const matchCrop = product.crop_name?.toLowerCase().includes(searchLower);
+                const matchDistrict = product.sell_location?.district?.toLowerCase().includes(searchLower)
+                    || product.locationName?.district?.toLowerCase().includes(searchLower)
+                    || product.formattedAddress?.district?.toLowerCase().includes(searchLower);
+                const matchVillage = product.locationName?.village?.toLowerCase().includes(searchLower)
+                    || product.formattedAddress?.village?.toLowerCase().includes(searchLower);
+                return matchCrop || matchDistrict || matchVillage;
+            });
         }
 
         if (maxPrice) {
-            result = result.filter(product => product.price <= parseFloat(maxPrice));
+            result = result.filter((product) => product.price <= parseFloat(maxPrice));
         }
 
         if (category) {
-            result = result.filter(product => product.category === category);
+            result = result.filter((product) => product.category === category);
         }
 
-        setFilteredProducts(result);
-    }, [searchTerm, maxPrice, category, products]);
+        return result;
+    }, [products, searchTerm, maxPrice, category]);
 
-    const handleOrderClick = (product) => {
-        setSelectedProduct(product);
-        setShowModal(true);
-    };
+    const memoizedProducts = useMemo(() => {
+        return filteredProducts.map((product) => {
+            const fc = product?.farmLocation?.coordinates;
+            const lc = product?.location?.coordinates;
+            const hasFarm = Array.isArray(fc) && fc.length === 2 && (fc[0] !== 0 || fc[1] !== 0);
+            const coords = hasFarm ? fc : lc;
+            const hasCoords = Array.isArray(coords) && coords.length === 2
+                && (coords[0] !== 0 || coords[1] !== 0);
+            const rawDist = hasCoords && hasUserLocation
+                ? calculateDistance(latitude, longitude, coords[1], coords[0])
+                : null;
+            const areIdenticalCoords = hasCoords
+                && hasUserLocation
+                && Math.abs(coords[1] - latitude) < 0.000001
+                && Math.abs(coords[0] - longitude) < 0.000001;
+            const dist = rawDist === 0 && areIdenticalCoords ? 0 : rawDist;
+            const distanceLabel = dist === 0 && areIdenticalCoords ? 'At your location' : null;
+
+            return { ...product, dist, distanceLabel };
+        });
+    }, [filteredProducts, latitude, longitude, hasUserLocation]);
+
+    const sortedForDisplay = useMemo(() => {
+        if (!nearMe || !hasUserLocation) return memoizedProducts;
+        return [...memoizedProducts].sort((a, b) => {
+            if (a.dist == null && b.dist == null) return 0;
+            if (a.dist == null) return 1;
+            if (b.dist == null) return -1;
+            return a.dist - b.dist;
+        });
+    }, [memoizedProducts, nearMe, hasUserLocation]);
 
     if (loading) return <Container className="text-center mt-5"><Spinner animation="border" /></Container>;
 
     return (
-        <Container>
-            <h2 className="mb-4 text-center">Fresh from Farms</h2>
+        <Container className="pb-5">
+            <h2 className="mb-2 text-center fw-bold text-success">KrushiBazaar — Farm2Door</h2>
+            <p className="text-center text-muted mb-4 small">Direct from Maharashtra farms · GPS-verified pins · Escrow-safe payments</p>
+            {nearMe && (
+                <p className="text-center text-success mb-3">
+                    Showing products near you (Sorted by distance)
+                </p>
+            )}
+            <div className="d-flex justify-content-center mb-3">
+                <Button
+                    variant={isTracking ? 'danger' : 'outline-success'}
+                    size="sm"
+                    onClick={isTracking ? stopTracking : startTracking}
+                >
+                    {isTracking ? 'Stop Live Tracking' : 'Live Track Me'}
+                </Button>
+            </div>
 
             {/* Search and Filter Section */}
             <Row className="mb-4 d-flex justify-content-center">
@@ -94,43 +168,45 @@ const Marketplace = () => {
                         <option value="Others">Others</option>
                     </Form.Select>
                 </Col>
+                <Col md={4} className="mb-2 d-flex align-items-center gap-2">
+                    <Form.Check
+                        type="switch"
+                        id="near-me-switch"
+                        label="Near Me"
+                        checked={nearMe}
+                        onChange={(e) => setNearMe(e.target.checked)}
+                    />
+                    {nearMe && (
+                        <Form.Control
+                            type="number"
+                            min="1"
+                            max="500"
+                            value={radiusKm}
+                            onChange={(e) => setRadiusKm(Number(e.target.value) || 50)}
+                            placeholder="Radius (km)"
+                        />
+                    )}
+                </Col>
             </Row>
+            {nearMe && locationError && (
+                <p className="text-warning small mb-3">
+                    Could not access your location: {locationError}
+                </p>
+            )}
 
-            <Row>
-                {filteredProducts.length > 0 ? (
-                    filteredProducts.map(product => (
-                        <Col md={4} key={product._id} className="mb-4">
-                            <Card className="h-100 shadow-sm">
-                                <Card.Img variant="top" src={product.image_url || 'https://via.placeholder.com/300x200?text=Farm+Produce'} style={{ height: '200px', objectFit: 'cover' }} />
-                                <Card.Body className="d-flex flex-column">
-                                    <div className="d-flex justify-content-between align-items-start mb-2">
-                                        <Card.Title>{product.crop_name}</Card.Title>
-                                        <Badge bg="success">₹{product.price}/kg</Badge>
-                                    </div>
-                                    <Card.Text className="text-muted small mb-1 d-flex justify-content-between align-items-center">
-                                        <span>From: {product.farmer_id.name}</span>
-                                        {product.rating?.count > 0 && (
-                                            <span className="text-warning fw-bold">
-                                                {product.rating.average} <i className="bi bi-star-fill small"></i>
-                                            </span>
-                                        )}
-                                    </Card.Text>
-                                    <Card.Text className="text-muted small">
-                                        {product.sell_location.village}, {product.sell_location.district}
-                                    </Card.Text>
-                                    <Card.Text>
-                                        <strong>Available:</strong> {product.quantity} kg
-                                    </Card.Text>
-
-                                    <Button
-                                        variant="outline-primary"
-                                        className="mt-auto w-100"
-                                        onClick={() => navigate(`/product/${product._id}`)}
-                                    >
-                                        View
-                                    </Button>
-                                </Card.Body>
-                            </Card>
+            <Row className="g-4">
+                {sortedForDisplay.length > 0 ? (
+                    sortedForDisplay.map((product, index) => (
+                        <Col md={4} sm={6} key={product._id}>
+                            <ProductCard
+                                product={product}
+                                nearMe={nearMe}
+                                hasUserLocation={hasUserLocation}
+                                dist={product.dist}
+                                distanceLabel={product.distanceLabel}
+                                isClosest={nearMe && index === 0 && product.dist != null && product.dist === sortedForDisplay[0]?.dist}
+                                onView={() => navigate(`/product/${product._id}`)}
+                            />
                         </Col>
                     ))
                 ) : (

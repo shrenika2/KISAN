@@ -7,7 +7,11 @@ const auth = require('../middleware/auth'); // Check middleware imports
 
 // Register
 router.post('/register', async (req, res) => {
-    const { name, phone, email, password, role, village, district, state } = req.body;
+    let { name, phone, email, password, role, village, district, state } = req.body;
+    
+    // Normalize email
+    if (email) email = email.trim().toLowerCase();
+    
     try {
         let user = await User.findOne({ email });
         if (user) return res.status(400).json({ msg: 'User already exists' });
@@ -33,7 +37,11 @@ router.post('/register', async (req, res) => {
 
 // Login
 router.post('/login', async (req, res) => {
-    const { email, password } = req.body;
+    let { email, password } = req.body;
+    
+    // Normalize email
+    if (email) email = email.trim().toLowerCase();
+    
     try {
         let user = await User.findOne({ email });
         if (!user) return res.status(400).json({ msg: 'Invalid Credentials' });

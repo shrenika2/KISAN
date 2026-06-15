@@ -107,7 +107,7 @@ const Dashboard = () => {
                                             <td>{order.farmer_id?.name || 'Unknown Farmer'}</td>
                                             <td>₹{order.final_price || order.negotiated_price || order.original_price}</td>
                                             <td>
-                                                <span className={`badge rounded-pill ${order.order_status === 'paid' || order.order_status === 'completed' ? 'bg-success' :
+                                                <span className={`badge rounded-pill ${order.order_status === 'paid' || order.order_status === 'shipped' || order.order_status === 'completed' ? 'bg-success' :
                                                         order.order_status === 'rejected' ? 'bg-danger' : 'bg-warning text-dark'
                                                     }`}>
                                                     {order.order_status.replace('_', ' ')}
